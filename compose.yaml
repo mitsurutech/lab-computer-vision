@@ -1,0 +1,260 @@
+# Computer vision in JupyterLab: a picture is a grid of numbers. Five made-up pictures (coins,
+# shapes, a road, a page scan and a grey ramp) and short scripts that read pixels, turn
+# colour to grey, pick a threshold, blur, find edges, count objects and find a piece of a
+# picture inside it, with Pillow, NumPy and scikit-image, in a JupyterLab of your own.
+#
+# Your copy is the only thing you may use, and it is the only thing you can reach: this lab
+# has no way out to the internet, so nothing you try can touch anybody else's machine.
+# Never point a tool at a site you do not own, in a lab or anywhere else.
+#
+# Open JupyterLab from the lab's page. The work folder holds images/ (five pictures drawn
+# from a fixed seed, nothing downloaded), start.ipynb, a notebook that opens one and reads
+# it, and steps/, short scripts that each do one idea at a time. The terminal beside the lab
+# reaches the same Python with docker exec, for example
+#   docker exec jupyter python3 steps/look.py
+#
+# Hand in a notebook of your own over one of the pictures (for example how many pixels pass
+# a threshold you chose, and why you chose it), downloaded from JupyterLab with File,
+# Download, and a sentence on what you found.
+#
+# The image runs as its own unprivileged account and needs no capabilities. JupyterLab asks
+# for no token, because the platform's own door in front of it already knows who you are; do
+# not run it like this anywhere else. Nothing is saved: download your notebook before you stop
+# the lab, because stopping it forgets every file you made.
+
+services:
+  jupyter:
+    image: jupyter/scipy-notebook:2023-10-20
+    user: "1000:100"
+    expose: ["8888"]
+    working_dir: /home/jovyan/work
+    environment:
+      HOME: /home/jovyan
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mkdir -p /home/jovyan/work /tmp/lab
+        cat > /tmp/lab/make.py <<'PY'
+        import json, os, random
+        import numpy as np
+        from PIL import Image, ImageDraw
+
+        os.makedirs("images", exist_ok=True)
+        os.makedirs("steps", exist_ok=True)
+        rng = np.random.default_rng(2026)
+
+        def save(array, name, mode):
+            Image.fromarray(np.clip(array, 0, 255).astype("uint8"), mode).save("images/" + name)
+
+        # coins.png: nine filled circles of three sizes on a dark, noisy background.
+        W, H = 320, 240
+        coins = [(50, 50, 14), (150, 45, 20), (260, 55, 28), (60, 140, 28), (160, 150, 14),
+                 (250, 160, 20), (50, 205, 20), (140, 210, 28), (270, 215, 14)]
+        face = Image.new("L", (W, H), 0)
+        paint = ImageDraw.Draw(face)
+        for x, y, r in coins:
+            paint.ellipse([x - r, y - r, x + r, y + r], fill=255)
+        mask = np.array(face) > 0
+        base = rng.normal(35, 7, (H, W))
+        shine = rng.normal(0, 8, (H, W))
+        red = np.where(mask, 205 + shine, base)
+        green = np.where(mask, 165 + shine, base)
+        blue = np.where(mask, 70 + shine, base)
+        save(np.dstack([red, green, blue]), "coins.png", "RGB")
+
+        # shapes.png: rectangles, circles and triangles in distinct colours on white.
+        shapes = Image.new("RGB", (300, 200), "white")
+        paint = ImageDraw.Draw(shapes)
+        paint.rectangle([20, 20, 90, 70], fill=(200, 40, 40))
+        paint.rectangle([110, 120, 190, 180], fill=(40, 70, 200))
+        paint.ellipse([120, 15, 180, 75], fill=(40, 160, 70))
+        paint.ellipse([215, 110, 275, 170], fill=(240, 150, 30))
+        paint.polygon([(30, 180), (80, 180), (55, 120)], fill=(130, 60, 160))
+        paint.polygon([(210, 70), (270, 70), (240, 20)], fill=(30, 160, 170))
+        shapes.save("images/shapes.png")
+
+        # road.png: a grey road, two white lane lines and a dashed centre line, a little noise.
+        road = Image.new("L", (320, 240), 70)
+        paint = ImageDraw.Draw(road)
+        paint.rectangle([60, 0, 260, 239], fill=110)
+        paint.rectangle([66, 0, 71, 239], fill=245)
+        paint.rectangle([249, 0, 254, 239], fill=245)
+        for top in range(0, 240, 40):
+            paint.rectangle([157, top, 162, top + 22], fill=235)
+        save(np.array(road) + rng.normal(0, 4, (240, 320)), "road.png", "L")
+
+        # scan.png: a grey page with dark text-like lines, uneven lighting and speckle noise.
+        page = np.full((240, 320), 205.0)
+        across = np.linspace(-1, 1, 320)
+        page = page - 45 * (across + 1) / 2
+        ink = Image.new("L", (320, 240), 0)
+        paint = ImageDraw.Draw(ink)
+        for line in range(8):
+            top = 60 + line * 20
+            left = 30
+            while left < 290:
+                word = random.Random(line * 100 + left).randint(14, 40)
+                paint.rectangle([left, top, min(left + word, 290), top + 6], fill=255)
+                left += word + 8
+        page = np.where(np.array(ink) > 0, 40.0, page)
+        page = page + rng.normal(0, 12, (240, 320))
+        speckle = rng.random((240, 320))
+        page = np.where(speckle < 0.01, 0, np.where(speckle > 0.99, 255, page))
+        save(page, "scan.png", "L")
+
+        # gradient.png: a smooth grey ramp, black on the left to white on the right.
+        save(np.tile(np.arange(256), (64, 1)), "gradient.png", "L")
+
+        def md(text):
+            return {"cell_type": "markdown", "metadata": {}, "source": text}
+
+        def code(text):
+            return {"cell_type": "code", "metadata": {}, "source": text, "outputs": [],
+                    "execution_count": None}
+
+        cells = [
+            md("# Looking at pictures with code\n\nThe folder images holds five made-up pictures. A "
+               "picture is a grid of numbers, and this notebook reads some of them. Run each cell "
+               "with Shift and Enter."),
+            code("from PIL import Image\n\npicture = Image.open(\"images/coins.png\")\npicture"),
+            code("print(picture.size, picture.mode)\nprint(picture.getpixel((10, 10)))"),
+            code("grey = picture.convert(\"L\")\ngrey"),
+            code("import numpy as np\n\nnumbers = np.array(grey)\nprint(numbers.shape, numbers.mean().round(1))"),
+            code("mask = numbers > 100\nImage.fromarray((mask * 255).astype(\"uint8\"))"),
+            md("## Your own question\n\nOpen another picture from images, such as road.png or scan.png, "
+               "and ask it something: how bright is it, where is it dark, how many pixels pass a "
+               "threshold you choose?"),
+        ]
+        book = {"cells": cells, "nbformat": 4, "nbformat_minor": 5,
+                "metadata": {"kernelspec": {"name": "python3", "display_name": "Python 3 (ipykernel)",
+                                            "language": "python"},
+                             "language_info": {"name": "python"}}}
+        with open("start.ipynb", "w") as out:
+            json.dump(book, out, indent=1)
+
+        # Short scripts the lessons' Run buttons start from the terminal, one idea each.
+        steps = {
+            "look.py": """from PIL import Image
+
+        picture = Image.open("images/coins.png")
+        print("size:", picture.size)
+        print("mode:", picture.mode)
+        print("pixel at 10, 10:", picture.getpixel((10, 10)))
+        print("pixel at 50, 50:", picture.getpixel((50, 50)))
+        grey = picture.convert("L")
+        print("grey mean:", round(sum(grey.getdata()) / (grey.width * grey.height), 1))
+        """,
+            "grey.py": """from PIL import Image
+
+        picture = Image.open("images/coins.png")
+        grey = picture.convert("L")
+        print("colour mode:", picture.mode, "grey mode:", grey.mode)
+        print("colour pixel at 50, 50:", picture.getpixel((50, 50)))
+        print("grey pixel at 50, 50:", grey.getpixel((50, 50)))
+        counts = grey.histogram()
+        print("pixels from 0 to 63:", sum(counts[0:64]))
+        print("pixels from 64 to 127:", sum(counts[64:128]))
+        print("pixels from 128 to 191:", sum(counts[128:192]))
+        print("pixels from 192 to 255:", sum(counts[192:256]))
+        grey.save("coins_grey.png")
+        print("saved coins_grey.png")
+        """,
+            "threshold.py": """import numpy as np
+        from PIL import Image
+
+        grey = np.array(Image.open("images/coins.png").convert("L"))
+        for level in [30, 100, 160]:
+            print("threshold", level, "keeps", int((grey > level).sum()), "pixels of", grey.size)
+        mask = grey > 100
+        Image.fromarray((mask * 255).astype("uint8")).save("coins_mask.png")
+        print("saved coins_mask.png")
+        """,
+            "blur.py": """import numpy as np
+        from PIL import Image, ImageFilter
+
+        scan = Image.open("images/scan.png")
+        blurred = scan.filter(ImageFilter.GaussianBlur(2))
+        before = np.array(scan)[10:50, 10:90]
+        after = np.array(blurred)[10:50, 10:90]
+        print("spread of an empty patch before:", round(float(before.std()), 1))
+        print("spread of an empty patch after:", round(float(after.std()), 1))
+        blurred.save("scan_blurred.png")
+        print("saved scan_blurred.png")
+        """,
+            "edges.py": """import numpy as np
+        from PIL import Image
+        from skimage import feature
+
+        shapes = np.array(Image.open("images/shapes.png").convert("L"))
+        edges = feature.canny(shapes, sigma=1)
+        print("picture pixels:", shapes.size)
+        print("edge pixels:", int(edges.sum()))
+        Image.fromarray((edges * 255).astype("uint8")).save("shapes_edges.png")
+        print("saved shapes_edges.png")
+        """,
+            "count.py": """import numpy as np
+        from PIL import Image
+        from skimage import measure
+
+        grey = np.array(Image.open("images/coins.png").convert("L"))
+        labels = measure.label(grey > 100)
+        print("objects found:", labels.max())
+        areas = sorted(int(one.area) for one in measure.regionprops(labels))
+        print("areas in pixels:", areas)
+        """,
+            "resize.py": """import os
+        from PIL import Image
+
+        picture = Image.open("images/coins.png")
+        half = picture.resize((picture.width // 2, picture.height // 2))
+        corner = picture.crop((0, 0, 160, 120))
+        print("original:", picture.size)
+        print("half size:", half.size)
+        print("cropped:", corner.size)
+        picture.save("full.png")
+        half.save("half.png")
+        picture.save("full.jpg", quality=85)
+        for name in ["full.png", "half.png", "full.jpg"]:
+            print(name, os.path.getsize(name), "bytes")
+        """,
+            "find.py": """import numpy as np
+        from PIL import Image
+        from skimage import feature
+
+        grey = np.array(Image.open("images/coins.png").convert("L"))
+        piece = grey[30:70, 30:70]
+        score = feature.match_template(grey, piece)
+        row, column = np.unravel_index(score.argmax(), score.shape)
+        print("piece cut from the corner at 30, 30, size", piece.shape[::-1])
+        print("best match starts at", int(column), int(row))
+        print("match score:", round(float(score.max()), 2))
+        """,
+        }
+        for name, text in steps.items():
+            with open(os.path.join("steps", name), "w") as out:
+                out.write(text)
+        PY
+        cd /home/jovyan/work
+        python3 /tmp/lab/make.py
+        exec jupyter lab --no-browser --ip=0.0.0.0 --port=8888 \
+          --ServerApp.root_dir=/home/jovyan/work \
+          --IdentityProvider.token= --ServerApp.password= \
+          '--ServerApp.allow_origin=*' --ServerApp.allow_remote_access=True \
+          --LabApp.check_for_updates_class=jupyterlab.NeverCheckForUpdate \
+          --LabApp.news_url=None
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/api', timeout=3)"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    labels:
+      lab.title: JupyterLab
+      lab.open: "8888"
